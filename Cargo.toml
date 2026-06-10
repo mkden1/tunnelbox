@@ -1,0 +1,46 @@
+[package]
+name = "tunnelbox-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Core
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# VPN
+wintun = "0.4"
+boringtun = "0.6"
+ipnet = "2"
+base64 = "0.22"
+wfp = "0.0.7"
+
+# Windows APIs
+windows = { version = "0.52.0", features = [
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_Rpc",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Environment",
+    "Win32_System_Memory",
+    "Win32_System_Services",    # for Windows Service registration
+    "Win32_System_IO",          # for named pipe async I/O
+    "Win32_System_JobObjects",
+]}
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"                      # for %APPDATA% path resolution
+tracing = "0.1"                 # structured logging
+tracing-subscriber = "0.3"
+configparser = "3"
+windivert = "0.6.0"
+socket2 = { version = "0.5", features = ["all"] }
+
