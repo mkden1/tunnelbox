@@ -22,7 +22,7 @@ impl Socks5Proxy {
         let listener = {
             let mut last_err = None;
             let mut listener = None;
-            for attempt in 0..20 {
+            for _attempt in 0..20 {
                 match TcpListener::bind(self.bind_addr) {
                     Ok(l) => { listener = Some(l); break; }
                     Err(e) => {

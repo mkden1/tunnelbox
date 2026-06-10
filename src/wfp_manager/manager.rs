@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use wfp::{
     ActionType, AppIdConditionBuilder, FilterBuilder, FilterEngineBuilder,
-    InterfaceConditionBuilder, Layer, SubLayerBuilder, Transaction,
+    InterfaceConditionBuilder, Layer, Transaction,
 };
 
 /// Tracks which profiles have active WFP filters
@@ -31,8 +31,8 @@ impl WfpManager {
         &mut self,
         profile_id: &str,
         apps: &[String],
-        tunnel_luid: u64,
-        real_luid: u64,
+        _tunnel_luid: u64,
+        _real_luid: u64,
     ) -> Result<()> {
         // Temporarily disabled — testing WinDivert routing without WFP block
         tracing::info!("WFP: skipping filter installation for testing");

@@ -194,10 +194,4 @@ impl WintunInterface {
         Ok(())
     }
 
-    pub fn read_packet(&self) -> Result<Option<Vec<u8>>> {
-        match self.session.try_receive()? {
-            Some(pkt) => Ok(Some(pkt.bytes().to_vec())),
-            None => Ok(None),
-        }
-    }
 }

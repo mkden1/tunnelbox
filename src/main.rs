@@ -1,5 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_imports)]
 mod config_store;
-mod divert;
 mod dns_proxy;
 mod ipc_server;
 mod job_tracker;
