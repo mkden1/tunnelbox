@@ -24,6 +24,7 @@ pub enum CommandKind {
     AppBind,
     AppUnbind,
     AppLaunch,
+    WireguardImport,
     DaemonStatus,
 }
 

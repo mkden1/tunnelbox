@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
+
 mod config_store;
 mod dns_proxy;
 mod ipc_server;
@@ -13,74 +14,49 @@ use std::sync::{Arc, Mutex};
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::new("info,wfp=off")
+        )
         .init();
 
+    tracing::info!("tunnelbox-daemon starting");
+
+    // Initialise config directory structure
     config_store::ConfigStore::init()?;
     tracing::info!("Config store initialised");
 
+    // Resolve real network adapter LUID at startup
+    // Used by WFP manager for per-app traffic blocking
     let real_luid = get_adapter_luid("Ethernet")?;
     tracing::info!("Real adapter LUID: {}", real_luid);
 
+    // Initialise tunnel manager
     let tunnel_manager = Arc::new(Mutex::new(
         tunnel_manager::TunnelManager::new(real_luid)?,
     ));
 
-    // ── Integration test ─────────────────────────────────────────────────────
-    let _profile_id = {
-        let mut tm = tunnel_manager.lock().unwrap();
+    // Auto-connect profiles marked for auto-connect
+    {
+        let profiles = config_store::ConfigStore::load_all()?;
+        let auto_connect: Vec<_> = profiles.into_iter()
+            .filter(|p| p.auto_connect)
+            .collect();
 
-        let profile = match config_store::ConfigStore::load_all()?
-            .into_iter()
-            .find(|p| p.name == "integration-test")
-        {
-            Some(p) => p,
-            None => {
-                let conf_contents = std::fs::read_to_string("vpn.conf")?;
-                let mut p = config_store::ConfigStore::create("integration-test")?;
-                p.save_wireguard_conf(&conf_contents)?;
-                p.apps.push(config_store::AppEntry {
-                    exe: r"C:\Windows\System32\curl.exe".to_string(),
-                    enabled: true,
-                });
-                config_store::ConfigStore::update(&p)?;
-                p
+        if !auto_connect.is_empty() {
+            let mut tm = tunnel_manager.lock().unwrap();
+            for profile in auto_connect {
+                tracing::info!("Auto-connecting profile: {}", profile.name);
+                if let Err(e) = tm.connect(&profile) {
+                    tracing::warn!("Failed to auto-connect {}: {}", profile.name, e);
+                }
             }
-        };
+        }
+    }
 
-        tm.connect(&profile)?;
-        tracing::info!("Profile connected — waiting 2s for WinDivert to initialise");
-
-        // Give the packet loop thread time to open its WinDivert handle
-        // before launching curl
-        std::thread::sleep(std::time::Duration::from_secs(5));
-
-        let pid = tm.launch(
-            &profile.id,
-            r"C:\Windows\System32\curl.exe",
-            &[
-                "-4".to_string(),
-                "--connect-timeout".to_string(),
-                "30".to_string(),
-                "-o".to_string(),
-                "curl_output.txt".to_string(),
-                "https://ifconfig.me".to_string(),
-            ],
-        )?;
-
-        tracing::info!("Launched curl via Job Object, pid: {}", pid);
-
-        profile.id
-    };
-    // ── End integration test ──────────────────────────────────────────────────
-
-    // Wait for curl to complete
-    std::thread::sleep(std::time::Duration::from_secs(30));
-
-    let output = std::fs::read_to_string("curl_output.txt").unwrap_or_default();
-    tracing::info!("curl result: {}", output.trim());
-
+    // Start IPC server — blocks until daemon exits
     let ipc_server = ipc_server::IpcServer::new(tunnel_manager.clone());
+    tracing::info!("IPC server starting");
     ipc_server.run().await?;
 
     Ok(())

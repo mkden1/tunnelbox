@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use super::wg_config::WgConfig;
@@ -24,7 +25,10 @@ pub enum TunnelState {
 /// Everything needed to run a tunnel for one profile
 struct TunnelEntry {
     state: TunnelState,
-    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Signals the WireGuard packet loop thread to stop
+    cancel: Option<Arc<AtomicBool>>,
+    /// Signals the SOCKS5 proxy thread to stop
+    proxy_cancel: Option<Arc<AtomicBool>>,
 }
 
 pub struct TunnelManager {
@@ -74,19 +78,16 @@ impl TunnelManager {
         let mut iface = WintunInterface::new(&adapter_name)?;
         iface.set_ip(&wg_conf.address)?;
 
-
-        // Start SOCKS5 proxy bound to Wintun IP
+        // Parse the Wintun IPv4 address for the SOCKS5 proxy bind address
         let wintun_ip: std::net::Ipv4Addr = wg_conf.address
             .split(',')
             .map(|s| s.trim())
             .find(|s| !s.contains(':'))
-            .ok_or_else(|| anyhow!("No IPv4 address"))?
+            .ok_or_else(|| anyhow!("No IPv4 address in WireGuard config"))?
             .split('/')
             .next()
-            .ok_or_else(|| anyhow!("Invalid address"))?
+            .ok_or_else(|| anyhow!("Invalid address format"))?
             .parse()?;
-
-
 
         let peer_ip = wg_conf.endpoint
             .split(':')
@@ -99,41 +100,43 @@ impl TunnelManager {
         let iface_index = iface.get_adapter_index()?;
         let luid = iface.get_luid();
 
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // ── WireGuard packet loop thread ──────────────────────────────────
+        let cancel = Arc::new(AtomicBool::new(false));
         let cancel_clone = cancel.clone();
-
-
         let profile_id_clone = profile.id.clone();
+
         thread::spawn(move || {
             if let Err(e) = session.run_loop_divert(iface, cancel_clone) {
                 tracing::error!("Packet loop error for {}: {}", profile_id_clone, e);
             }
         });
 
+        // Brief pause to let the Wintun interface settle before binding the proxy
         std::thread::sleep(std::time::Duration::from_millis(200));
 
+        // ── SOCKS5 proxy thread ───────────────────────────────────────────
+        let proxy_cancel = Arc::new(AtomicBool::new(false));
+        let proxy_cancel_clone = proxy_cancel.clone();
+
         let proxy = crate::dns_proxy::Socks5Proxy::new(wintun_ip, 1080);
-        std::thread::spawn(move || {
-            if let Err(e) = proxy.run() {
+        thread::spawn(move || {
+            if let Err(e) = proxy.run(proxy_cancel_clone) {
                 tracing::error!("SOCKS5 proxy error: {e}");
             }
         });
 
-        let wintun_ip = wg_conf.address
-            .split(',')
-            .map(|s| s.trim())
-            .find(|s| !s.contains(':'))
-            .unwrap_or("")
-            .split('/')
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let wintun_ip_str = wintun_ip.to_string();
 
         self.tunnels.insert(
             profile.id.clone(),
             TunnelEntry {
-                state: TunnelState::Connected { luid, iface_index, wintun_ip },
+                state: TunnelState::Connected {
+                    luid,
+                    iface_index,
+                    wintun_ip: wintun_ip_str,
+                },
                 cancel: Some(cancel),
+                proxy_cancel: Some(proxy_cancel),
             },
         );
 
@@ -162,15 +165,25 @@ impl TunnelManager {
     }
 
     /// Disconnects a tunnel for the given profile.
-    /// Dropping the WintunInterface destroys the adapter and cleans up routes.
+    /// Signals both the WireGuard loop and SOCKS5 proxy threads to stop,
+    /// removes WFP filters, and destroys the Job Object (killing all
+    /// processes that were launched under this profile).
     pub fn disconnect(&mut self, profile_id: &str) -> Result<()> {
         let entry = self.tunnels.get_mut(profile_id)
             .ok_or_else(|| anyhow!("Profile {} is not connected", profile_id))?;
 
+        // Signal WireGuard loop to stop
         if let Some(cancel) = &entry.cancel {
-            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            cancel.store(true, Ordering::Relaxed);
         }
         entry.cancel = None;
+
+        // Signal SOCKS5 proxy to stop — it will exit within ~250 ms
+        if let Some(proxy_cancel) = &entry.proxy_cancel {
+            proxy_cancel.store(true, Ordering::Relaxed);
+        }
+        entry.proxy_cancel = None;
+
         entry.state = TunnelState::Disconnected;
 
         tracing::info!("Profile {} disconnected", profile_id);

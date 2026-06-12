@@ -123,6 +123,15 @@ impl Handler {
                 Ok(serde_json::json!({ "launched": true, "pid": pid }))
             }
 
+            CommandKind::WireguardImport => {
+                let profile_id = payload["profile_id"].as_str()
+                    .ok_or_else(|| anyhow!("Missing profile_id"))?.to_string();
+                let contents = payload["contents"].as_str()
+                    .ok_or_else(|| anyhow!("Missing contents"))?.to_string();
+                ConfigStore::import_wireguard_conf(&profile_id, &contents)?;
+                Ok(serde_json::json!({ "imported": true }))
+            }
+
             CommandKind::DaemonStatus => {
                 Ok(serde_json::to_value(DaemonStatusPayload {
                     version: env!("CARGO_PKG_VERSION").to_string(),

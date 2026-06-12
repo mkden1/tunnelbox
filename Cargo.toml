@@ -39,7 +39,7 @@ windows = { version = "0.52.0", features = [
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"                      # for %APPDATA% path resolution
 tracing = "0.1"                 # structured logging
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 configparser = "3"
 windivert = "0.6.0"
 socket2 = { version = "0.5", features = ["all"] }

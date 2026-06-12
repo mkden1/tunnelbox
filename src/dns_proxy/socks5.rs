@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::io::{Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use socket2::{Socket, Domain, Type};
 
 pub struct Socks5Proxy {
@@ -17,23 +19,32 @@ impl Socks5Proxy {
         }
     }
 
-    /// Starts the proxy — blocks forever, call on its own thread.
-    pub fn run(&self) -> Result<()> {
-        let listener = {
+    /// Starts the proxy — blocks until `cancel` is set to true.
+    /// Call on its own thread. Pass the same `cancel` flag to
+    /// `TunnelEntry` so `disconnect()` can shut it down cleanly.
+    pub fn run(&self, cancel: Arc<AtomicBool>) -> Result<()> {
+        // Build the listener via socket2 so we can set a read timeout,
+        // which allows the accept loop to wake up and check `cancel`
+        // periodically rather than blocking forever.
+        let socket = {
             let mut last_err = None;
-            let mut listener = None;
+            let mut sock = None;
             for _attempt in 0..20 {
-                match TcpListener::bind(self.bind_addr) {
-                    Ok(l) => { listener = Some(l); break; }
+                match self.try_bind() {
+                    Ok(s) => { sock = Some(s); break; }
                     Err(e) => {
                         last_err = Some(e);
                         std::thread::sleep(std::time::Duration::from_millis(200));
                     }
                 }
             }
-            listener.ok_or_else(|| anyhow!("Failed to bind after retries: {:?}", last_err))?
+            sock.ok_or_else(|| anyhow!("SOCKS5 failed to bind after retries: {:?}", last_err))?
         };
 
+        // Wake up every 250 ms to check the cancel flag
+        socket.set_read_timeout(Some(std::time::Duration::from_millis(250)))?;
+
+        let listener: std::net::TcpListener = socket.into();
         tracing::info!("SOCKS5 proxy listening on {}", self.bind_addr);
 
         let bind_ip = match self.bind_addr.ip() {
@@ -41,23 +52,39 @@ impl Socks5Proxy {
             _ => return Err(anyhow!("Only IPv4 supported")),
         };
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(client) => {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                tracing::info!("SOCKS5 proxy shutting down on {}", self.bind_addr);
+                return Ok(());
+            }
+
+            match listener.accept() {
+                Ok((client, _)) => {
                     std::thread::spawn(move || {
                         if let Err(e) = handle_client(client, bind_ip) {
                             tracing::warn!("SOCKS5 client error: {e}");
                         }
                     });
                 }
+                // Timeout from set_read_timeout — expected, just loop back
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                       || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => tracing::warn!("SOCKS5 accept error: {e}"),
             }
         }
-        Ok(())
+    }
+
+    /// Builds and binds the socket2 listener socket.
+    fn try_bind(&self) -> Result<Socket> {
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None)?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&self.bind_addr.into())?;
+        socket.listen(128)?;
+        Ok(socket)
     }
 }
 
-fn handle_client(mut client: TcpStream, bind_ip: std::net::Ipv4Addr) -> Result<()> {
+fn handle_client(mut client: TcpStream, bind_ip: Ipv4Addr) -> Result<()> {
     // ── SOCKS5 handshake ─────────────────────────────────────────────────
 
     // Read greeting: VER NMETHODS METHODS...
@@ -158,7 +185,6 @@ fn handle_client(mut client: TcpStream, bind_ip: std::net::Ipv4Addr) -> Result<(
             client.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0])?;
         }
     }
-    
 
     Ok(())
 }
