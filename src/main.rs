@@ -7,62 +7,109 @@ mod ipc_server;
 mod job_tracker;
 mod tunnel_manager;
 mod wfp_manager;
+mod windows_service;
 
 use anyhow::{anyhow, Result};
 use std::sync::{Arc, Mutex};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::new("info,wfp=off")
-        )
-        .init();
+fn main() -> Result<()> {
+    init_tracing();
 
-    tracing::info!("tunnelbox-daemon starting");
+    let args: Vec<String> = std::env::args().collect();
+    let subcommand = args.get(1).map(|s| s.as_str());
 
-    // Initialise config directory structure
-    config_store::ConfigStore::init()?;
-    tracing::info!("Config store initialised");
+    match subcommand {
+        Some("install") => {
+            windows_service::install_service()?;
+        }
 
-    // Resolve real network adapter LUID at startup
-    // Used by WFP manager for per-app traffic blocking
-    let real_luid = get_adapter_luid("Ethernet")?;
-    tracing::info!("Real adapter LUID: {}", real_luid);
+        Some("uninstall") => {
+            windows_service::uninstall_service()?;
+        }
 
-    // Initialise tunnel manager
-    let tunnel_manager = Arc::new(Mutex::new(
-        tunnel_manager::TunnelManager::new(real_luid)?,
-    ));
+        Some("run") | None => {
+            // "run" is an explicit direct-run flag for development/testing.
+            // No argument means we were either launched by SCM or from a terminal.
+            // Try to hand off to SCM first; if that fails it means we're not
+            // running under SCM, so fall back to direct console mode.
+            if subcommand == Some("run") || !try_run_as_service() {
+                run_direct()?;
+            }
+        }
 
-    // Auto-connect profiles marked for auto-connect
-    {
-        let profiles = config_store::ConfigStore::load_all()?;
-        let auto_connect: Vec<_> = profiles.into_iter()
-            .filter(|p| p.auto_connect)
-            .collect();
+        Some(unknown) => {
+            eprintln!("Unknown subcommand: '{}'", unknown);
+            eprintln!();
+            print_usage();
+            std::process::exit(1);
+        }
+    }
 
-        if !auto_connect.is_empty() {
+    Ok(())
+}
+
+/// Attempts to start as a Windows Service. Returns false if we're not running
+/// under SCM (i.e. launched directly from a terminal), true if SCM took over.
+fn try_run_as_service() -> bool {
+    // service_dispatcher::start() will return an error immediately if this
+    // process was not started by SCM. That's our signal to run directly.
+    match windows_service::run_as_service() {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// Runs the daemon directly in the current process — used during development
+/// or when invoked with the explicit `run` subcommand.
+fn run_direct() -> Result<()> {
+    tracing::info!("tunnelbox-daemon starting (direct mode)");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async {
+        config_store::ConfigStore::init()?;
+        tracing::info!("Config store initialised");
+
+        let real_luid = get_adapter_luid("Ethernet")?;
+        tracing::info!("Real adapter LUID: {}", real_luid);
+
+        let tunnel_manager = Arc::new(Mutex::new(
+            tunnel_manager::TunnelManager::new(real_luid)?,
+        ));
+
+        // Auto-connect profiles marked for auto-connect
+        {
+            let profiles = config_store::ConfigStore::load_all()?;
             let mut tm = tunnel_manager.lock().unwrap();
-            for profile in auto_connect {
+            for profile in profiles.into_iter().filter(|p| p.auto_connect) {
                 tracing::info!("Auto-connecting profile: {}", profile.name);
                 if let Err(e) = tm.connect(&profile) {
                     tracing::warn!("Failed to auto-connect {}: {}", profile.name, e);
                 }
             }
         }
-    }
 
-    // Start IPC server — blocks until daemon exits
-    let ipc_server = ipc_server::IpcServer::new(tunnel_manager.clone());
-    tracing::info!("IPC server starting");
-    ipc_server.run().await?;
+        let ipc_server = ipc_server::IpcServer::new(tunnel_manager.clone());
+        tracing::info!("IPC server starting");
+        ipc_server.run().await?;
 
-    Ok(())
+        anyhow::Ok(())
+    })
 }
 
-fn get_adapter_luid(adapter_name: &str) -> Result<u64> {
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            // Silence the noisy wfp crate transaction abort messages
+            EnvFilter::new("info,wfp=off"),
+        )
+        .init();
+}
+
+pub fn get_adapter_luid(adapter_name: &str) -> Result<u64> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::NetworkManagement::IpHelper::ConvertInterfaceAliasToLuid;
@@ -83,4 +130,14 @@ fn get_adapter_luid(adapter_name: &str) -> Result<u64> {
     .map_err(|e| anyhow!("Failed to resolve adapter '{}': {e}", adapter_name))?;
 
     Ok(unsafe { luid.Value })
+}
+
+fn print_usage() {
+    eprintln!("Usage: tunnelbox-daemon [SUBCOMMAND]");
+    eprintln!();
+    eprintln!("SUBCOMMANDS:");
+    eprintln!("  install    Register as a Windows Service (requires Administrator)");
+    eprintln!("  uninstall  Remove the Windows Service registration (requires Administrator)");
+    eprintln!("  run        Run directly in the current console (development mode)");
+    eprintln!("  <none>     Run directly or hand off to SCM if launched as a service");
 }

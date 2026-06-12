@@ -30,17 +30,20 @@ windows = { version = "0.52.0", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Environment",
     "Win32_System_Memory",
-    "Win32_System_Services",    # for Windows Service registration
-    "Win32_System_IO",          # for named pipe async I/O
+    "Win32_System_Services",
+    "Win32_System_IO",
     "Win32_System_JobObjects",
 ]}
 
+# Windows Service
+windows-service = "0.7"
+
 # Utilities
 uuid = { version = "1", features = ["v4"] }
-dirs = "5"                      # for %APPDATA% path resolution
-tracing = "0.1"                 # structured logging
+dirs = "5"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 configparser = "3"
 windivert = "0.6.0"
 socket2 = { version = "0.5", features = ["all"] }
-
+windows-sys = "0.61.2"
