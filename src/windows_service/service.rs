@@ -27,6 +27,17 @@ pub fn run_as_service() -> Result<()> {
 
 /// The actual service logic, called by ffi_service_main on an SCM thread.
 pub fn run_service(_arguments: Vec<OsString>) -> windows_service::Result<()> {
+    let _ = std::fs::write(
+        "C:\\temp\\tunnelbox-startup.txt",
+        "run_service entered\n",
+    );
+
+    crate::init_tracing();
+
+    let _ = std::fs::write(
+        "C:\\temp\\tunnelbox-startup.txt",
+        "init_tracing done\n",
+    );
     // Channel used to receive the stop signal from the SCM control handler.
     // The handler closure runs on a separate SCM thread so we need this to
     // communicate back to the service work thread.
@@ -86,19 +97,48 @@ fn init_and_run(
     status_handle: service_control_handler::ServiceStatusHandle,
     stop_rx: std::sync::mpsc::Receiver<()>,
 ) -> Result<()> {
-    // Build a tokio runtime manually — we can't use #[tokio::main] here
-    // because we're already on an SCM-managed thread.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?;
+        .build()
+        .map_err(|e| {
+            let _ = std::fs::write(
+                "C:\\temp\\tunnelbox-startup.txt",
+                format!("tokio runtime build failed: {e}\n"),
+            );
+            e
+        })?;
 
     rt.block_on(async move {
-        crate::config_store::ConfigStore::init()?;
+        let _ = std::fs::write(
+            "C:\\temp\\tunnelbox-startup.txt",
+            "inside block_on\n",
+        );
 
-        let real_luid = crate::get_adapter_luid("Ethernet")?;
-        tracing::info!("Real adapter LUID: {}", real_luid);
+        crate::config_store::ConfigStore::init().map_err(|e| {
+            let _ = std::fs::write(
+                "C:\\temp\\tunnelbox-startup.txt",
+                format!("config_store init failed: {e}\n"),
+            );
+            e
+        })?;
 
-        let tunnel_manager = Arc::new(Mutex::new(TunnelManager::new(real_luid)?));
+        let _ = std::fs::write(
+            "C:\\temp\\tunnelbox-startup.txt",
+            "config_store ok\n",
+        );
+
+        let tunnel_manager = Arc::new(Mutex::new(TunnelManager::new().map_err(|e| {
+            let _ = std::fs::write(
+                "C:\\temp\\tunnelbox-startup.txt",
+                format!("TunnelManager::new failed: {e}\n"),
+        );
+            e
+        })?));
+
+        let _ = std::fs::write(
+            "C:\\temp\\tunnelbox-startup.txt",
+            "TunnelManager created ok\n",
+        );
 
         // Auto-connect profiles
         {

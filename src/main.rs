@@ -2,15 +2,16 @@
 #![allow(unused_imports)]
 
 mod config_store;
-mod dns_proxy;
+mod divert_engine;
 mod ipc_server;
 mod job_tracker;
 mod tunnel_manager;
-mod wfp_manager;
 mod windows_service;
 
 use anyhow::{anyhow, Result};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+static TRACING_INIT: OnceLock<()> = OnceLock::new();
 
 fn main() -> Result<()> {
     init_tracing();
@@ -72,11 +73,8 @@ fn run_direct() -> Result<()> {
         config_store::ConfigStore::init()?;
         tracing::info!("Config store initialised");
 
-        let real_luid = get_adapter_luid("Ethernet")?;
-        tracing::info!("Real adapter LUID: {}", real_luid);
-
         let tunnel_manager = Arc::new(Mutex::new(
-            tunnel_manager::TunnelManager::new(real_luid)?,
+            tunnel_manager::TunnelManager::new()?,
         ));
 
         // Auto-connect profiles marked for auto-connect
@@ -99,15 +97,40 @@ fn run_direct() -> Result<()> {
     })
 }
 
-fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            // Silence the noisy wfp crate transaction abort messages
-            EnvFilter::new("info,wfp=off"),
-        )
-        .init();
+pub fn init_tracing() {
+    TRACING_INIT.get_or_init(|| {
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::EnvFilter;
+
+        let filter = EnvFilter::new("debug,wfp=off");
+
+        let file_layer = (|| -> Option<_> {
+            let log_path = crate::config_store::log_path().ok()?;
+            let log_dir = log_path.parent()?;
+            std::fs::create_dir_all(log_dir).ok()?;
+            let log_file = log_path.file_name()?;
+            let appender = tracing_appender::rolling::never(log_dir, log_file);
+            let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+            Box::leak(Box::new(guard));
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(non_blocking)
+                    .with_ansi(false),
+            )
+        })();
+
+        let stderr_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(true);
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(file_layer)
+            .with(stderr_layer)
+            .init();
+    });
 }
+
 
 pub fn get_adapter_luid(adapter_name: &str) -> Result<u64> {
     use std::ffi::OsStr;

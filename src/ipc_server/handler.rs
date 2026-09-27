@@ -37,7 +37,9 @@ impl Handler {
                     .ok_or_else(|| anyhow!("Missing profile_id"))?
                     .to_string();
                 let profile = ConfigStore::get(&profile_id)?;
-                self.tunnel_manager.lock().unwrap().connect(&profile)?;
+                self.tunnel_manager.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .connect(&profile)?;
                 Ok(serde_json::json!({ "connected": true }))
             }
 
@@ -45,12 +47,16 @@ impl Handler {
                 let profile_id = payload["profile_id"].as_str()
                     .ok_or_else(|| anyhow!("Missing profile_id"))?
                     .to_string();
-                self.tunnel_manager.lock().unwrap().disconnect(&profile_id)?;
+                self.tunnel_manager.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .disconnect(&profile_id)?;
                 Ok(serde_json::json!({ "connected": false }))
             }
 
             CommandKind::TunnelStatus => {
-                let status = self.tunnel_manager.lock().unwrap().status();
+                let status = self.tunnel_manager.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .status();
                 Ok(serde_json::to_value(TunnelStatusPayload { tunnels: status })?)
             }
 
@@ -85,6 +91,9 @@ impl Handler {
                     .ok_or_else(|| anyhow!("Missing profile_id"))?.to_string();
                 let exe_path = payload["exe_path"].as_str()
                     .ok_or_else(|| anyhow!("Missing exe_path"))?.to_string();
+                let exe_path: String = exe_path.chars()
+                    .filter(|c| c.is_ascii() && !c.is_ascii_control())
+                    .collect();
                 let mut profile = ConfigStore::get(&profile_id)?;
                 if !profile.apps.iter().any(|a| a.exe == exe_path) {
                     profile.apps.push(AppEntry { exe: exe_path, enabled: true });
@@ -117,7 +126,8 @@ impl Handler {
                     .collect();
 
                 let pid = self.tunnel_manager
-                    .lock().unwrap()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .launch(&profile_id, &exe_path, &args)?;
 
                 Ok(serde_json::json!({ "launched": true, "pid": pid }))

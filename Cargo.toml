@@ -11,11 +11,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # VPN
-wintun = "0.4"
 boringtun = "0.6"
 ipnet = "2"
 base64 = "0.22"
-wfp = "0.0.7"
 
 # Windows APIs
 windows = { version = "0.52.0", features = [
@@ -25,6 +23,10 @@ windows = { version = "0.52.0", features = [
     "Win32_Networking_WinSock",
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_System_Rpc",
     "Win32_Storage_FileSystem",
@@ -33,6 +35,9 @@ windows = { version = "0.52.0", features = [
     "Win32_System_Services",
     "Win32_System_IO",
     "Win32_System_JobObjects",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
 ]}
 
 # Windows Service
@@ -44,5 +49,15 @@ dirs = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 configparser = "3"
+windivert-sys = "0.10"
+# WinDivert's FFI uses windows 0.48 types; alias it so we can name the HANDLE
+# type its functions expect (the rest of the daemon is on windows 0.52).
+windivert-windows = { package = "windows", version = "0.48", features = ["Win32_Foundation"] }
 socket2 = { version = "0.5", features = ["all"] }
-windows-sys = "0.61.2"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+]}
+tracing-appender = "0.2"

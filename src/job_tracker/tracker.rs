@@ -35,11 +35,10 @@ impl JobTracker {
         profile_id: &str,
         exe_path: &str,
         args: &[String],
-        proxy_addr: Option<&str>,
     ) -> Result<u32> {
         let job = self.jobs.get_mut(profile_id)
             .ok_or_else(|| anyhow!("No Job Object for profile {}", profile_id))?;
-        job.spawn(exe_path, args, proxy_addr)
+        job.spawn(exe_path, args)
     }
 
     /// Returns all PIDs running under a profile's job.

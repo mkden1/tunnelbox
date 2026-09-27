@@ -56,17 +56,28 @@ impl IpcServer {
         let (reader, mut writer) = tokio::io::split(pipe);
         let mut lines = TokioBufReader::new(reader).lines();
 
-        // Read one JSON command per line, write one JSON response per line
         while let Some(line) = lines.next_line().await? {
             if line.trim().is_empty() {
                 continue;
             }
 
-            let response = match serde_json::from_str::<Command>(&line) {
-                Ok(command) => handler.handle(command),
-                Err(e) => {
-                    super::protocol::Response::error("unknown", format!("Parse error: {e}"))
+            let handler = handler.clone();
+            let line_clone = line.clone();
+            
+            // Run the blocking handler on a thread pool thread so it doesn't
+            // block the tokio reactor while tunnel_connect is doing I/O
+            let response = match tokio::task::spawn_blocking(move || {
+                match serde_json::from_str::<Command>(&line_clone) {
+                    Ok(command) => handler.handle(command),
+                    Err(e) => super::protocol::Response::error(
+                        "unknown", format!("Parse error: {e}")
+                    ),
                 }
+            }).await {
+                Ok(r) => r,
+                Err(e) => super::protocol::Response::error(
+                    "unknown", format!("Internal error: {e}")
+                ),
             };
 
             let mut json = serde_json::to_string(&response)?;

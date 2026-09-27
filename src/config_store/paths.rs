@@ -1,10 +1,14 @@
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
-/// Returns the root data directory: %APPDATA%\Tunnelbox
+/// Returns the root data directory: %PROGRAMDATA%\Tunnelbox
+///
+/// Using ProgramData (not AppData) so the path is the same whether the daemon
+/// runs as LocalSystem or as the logged-in user.
 pub fn data_dir() -> Result<PathBuf> {
-    let base = dirs::config_dir()
-        .ok_or_else(|| anyhow!("Could not resolve %APPDATA%"))?;
+    let base = std::env::var("PROGRAMDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("C:\\ProgramData"));
     Ok(base.join("Tunnelbox"))
 }
 
